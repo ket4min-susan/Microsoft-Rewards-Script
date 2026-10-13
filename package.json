@@ -5,13 +5,16 @@
     "author": "Netsky",
     "license": "GPL-3.0-or-later",
     "engines": {
-        "node": ">=24.0.0"
+        "node": ">=22.0.0"
     },
     "scripts": {
         "pre-build": "npm i && rimraf dist && npx patchright install chromium",
         "install:browser": "npx patchright install chromium",
+        "postinstall": "npx patchright install --with-deps chromium",
         "build": "rimraf dist && tsc && node ./scripts/main/copyAssets.js",
-        "start": "node ./dist/index.js",
+        "start": "node ./dist/scheduler.js",
+        "start:once": "node ./dist/index.js",
+        "schedule": "node ./dist/scheduler.js",
         "ts-start": "ts-node ./src/index.ts",
         "dev": "ts-node ./src/index.ts -dev",
         "api": "node ./scripts/api/server.js",

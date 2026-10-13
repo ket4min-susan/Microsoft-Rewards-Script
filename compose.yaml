@@ -14,16 +14,16 @@ services:
             - path: .env
         environment:
             # ── Scheduler ──────────────────────────────────────
-            TZ: 'America/Toronto'
+            TZ: 'Asia/Ho_Chi_Minh'
             NODE_ENV: 'production'
             # CRON_SCHEDULE is the *initial* default. It will run as default unless changed by the API
             # API schedule changes are saved to ./config/schedule.json, delete
             # that file to revert to the base CRON_SCHEDULE again.
-            CRON_SCHEDULE: '0 7 * * *' # use crontab.guru to customize your schedule
-            RUN_ON_START: 'true' # run script immediately on container start
+            CRON_SCHEDULE: '0 9 * * *' # Chạy tự động vào 9:00 AM mỗi ngày
+            RUN_ON_START: 'false' # Đặt 'true' nếu muốn chạy ngay 1 lần khi bật container
             SKIP_RANDOM_SLEEP: 'false'
-            #MIN_SLEEP_MINUTES: "5"
-            #MAX_SLEEP_MINUTES: "50"
+            MIN_SLEEP_MINUTES: '1'
+            MAX_SLEEP_MINUTES: '15'
             #STUCK_PROCESS_TIMEOUT_HOURS: "8"
 
             # ── API mode ──────────────────────────────────────

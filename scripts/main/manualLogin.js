@@ -364,7 +364,30 @@ async function runPlatform({ account, config, dbPath, platform, fresh }) {
             log('WARN', `Initial Rewards navigation did not finish cleanly: ${error.message}`)
         })
 
-        log('INFO', 'Complete the Microsoft sign-in manually in the browser window')
+        // Auto-fill email and password if present so user only needs to handle 2FA
+        try {
+            const emailInput = await page.waitForSelector('input[type="email"], input[name="loginfmt"]', { state: 'visible', timeout: 5000 }).catch(() => null)
+            if (emailInput && account.email) {
+                log('INFO', `Auto-filling email: ${account.email}`)
+                await emailInput.fill(account.email)
+                await new Promise(r => setTimeout(r, 600))
+                const nextBtn = await page.waitForSelector('button[type="submit"], input[type="submit"]', { state: 'visible', timeout: 3000 }).catch(() => null)
+                if (nextBtn) await nextBtn.click().catch(() => {})
+            }
+
+            const pwdInput = await page.waitForSelector('input[type="password"], input[name="passwd"]', { state: 'visible', timeout: 5000 }).catch(() => null)
+            if (pwdInput && account.password) {
+                log('INFO', 'Auto-filling password...')
+                await pwdInput.fill(account.password)
+                await new Promise(r => setTimeout(r, 600))
+                const subBtn = await page.waitForSelector('button[type="submit"], input[type="submit"]', { state: 'visible', timeout: 3000 }).catch(() => null)
+                if (subBtn) await subBtn.click().catch(() => {})
+            }
+        } catch (e) {
+            log('DEBUG', `Auto-fill note: ${e.message}`)
+        }
+
+        log('INFO', 'Complete the Microsoft 2FA/verification in the browser window if prompted')
         await waitForStableRewardsPage(page, browser)
         if (interrupted) throw new Error('Manual login was interrupted')
 

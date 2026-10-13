@@ -8,44 +8,65 @@ export interface PromptOptions {
     transform?: (input: string) => string
 }
 
+import fs from 'node:fs'
+import path from 'node:path'
+
 export function canPromptForInput(): boolean {
-    return process.stdin.isTTY === true
+    return true
 }
 
 export function promptInput(options: PromptOptions): Promise<string | null> {
-    if (!canPromptForInput()) return Promise.resolve(null)
-
     const { question, timeoutSeconds = 60, validate, transform } = options
 
     return new Promise(resolve => {
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout
-        })
-
         let resolved = false
+        let filePollInterval: NodeJS.Timeout | null = null
+        let rl: readline.Interface | null = null
+        const codeFilePath = path.resolve(process.cwd(), 'code.txt')
 
         const cleanup = (result: string | null) => {
             if (resolved) return
             resolved = true
             clearTimeout(timer)
-            rl.close()
+            if (filePollInterval) clearInterval(filePollInterval)
+            if (rl) rl.close()
             resolve(result)
         }
 
         const timer = setTimeout(() => cleanup(null), timeoutSeconds * 1000)
 
-        rl.question(question, answer => {
-            let value = answer.trim()
-            if (transform) value = transform(value)
+        filePollInterval = setInterval(() => {
+            try {
+                if (fs.existsSync(codeFilePath)) {
+                    let content = fs.readFileSync(codeFilePath, 'utf8').trim()
+                    if (transform) content = transform(content)
+                    if (!validate || validate(content)) {
+                        try {
+                            fs.unlinkSync(codeFilePath)
+                        } catch {}
+                        cleanup(content)
+                    }
+                }
+            } catch {}
+        }, 1000)
 
-            if (validate && !validate(value)) {
-                cleanup(null)
-                return
-            }
+        if (process.stdin.isTTY) {
+            rl = readline.createInterface({
+                input: process.stdin,
+                output: process.stdout
+            })
+            rl.question(question, answer => {
+                let value = answer.trim()
+                if (transform) value = transform(value)
 
-            cleanup(value)
-        })
+                if (validate && !validate(value)) {
+                    cleanup(null)
+                    return
+                }
+
+                cleanup(value)
+            })
+        }
     })
 }
 

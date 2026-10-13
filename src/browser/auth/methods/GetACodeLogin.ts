@@ -1,10 +1,10 @@
 import type { Page } from 'patchright'
 import type { MicrosoftRewardsBot } from '../../../index'
-import { canPromptForInput, getErrorMessage, getSubtitleMessage, promptInput } from './LoginUtils'
+import { getErrorMessage, getSubtitleMessage, promptInput } from './LoginUtils'
 
 export class CodeLogin {
-    private readonly textInputSelector = '[data-testid="codeInputWrapper"]'
-    private readonly secondairyInputSelector = 'input[id="otc-confirmation-input"], input[name="otc"]'
+    private readonly textInputSelector = '[data-testid="codeInputWrapper"], input[name="otc"], input[id="otc-confirmation-input"], input[type="tel"]'
+    private readonly secondairyInputSelector = 'input[id="otc-confirmation-input"], input[name="otc"], input[type="tel"], input[aria-label*="code" i]'
     private readonly emailVerificationInputSelectors = [
         'input#proof-confirmation-email-input',
         '[data-testid="proof-confirmation"]'
@@ -27,10 +27,11 @@ export class CodeLogin {
     private async fillCode(page: Page, code: string): Promise<boolean> {
         try {
             const visibleInput = await page
-                .waitForSelector(this.textInputSelector, { state: 'visible', timeout: 500 })
+                .waitForSelector(this.textInputSelector, { state: 'visible', timeout: 1500 })
                 .catch(() => null)
 
             if (visibleInput) {
+                await visibleInput.click().catch(() => {})
                 await page.keyboard.type(code, { delay: 50 })
                 const stilOnPage = await page
                     .waitForSelector(this.textInputSelector, { state: 'visible', timeout: 750 })
@@ -45,6 +46,7 @@ export class CodeLogin {
 
             const secondairyInput = await page.$(this.secondairyInputSelector)
             if (secondairyInput) {
+                await secondairyInput.click().catch(() => {})
                 await page.keyboard.type(code, { delay: 50 })
 
                 const stilOnPage = await page
@@ -95,13 +97,9 @@ export class CodeLogin {
         }
     }
 
-    async handle(page: Page): Promise<void> {
+    async handle(page: Page, accountEmail?: string): Promise<void> {
         try {
             this.bot.logger.info(this.bot.isMobile, 'LOGIN-CODE', 'Code login authentication requested')
-
-            if (!canPromptForInput()) {
-                throw new Error('Email-code authentication requires interactive stdin; unavailable in background mode')
-            }
 
             const emailMessage = await getSubtitleMessage(page)
             if (emailMessage) {
@@ -124,11 +122,25 @@ export class CodeLogin {
                 this.bot.logger.info(
                     this.bot.isMobile,
                     'LOGIN-CODE',
-                    'Email verification challenge detected, awaiting email address'
+                    'Email verification challenge detected, submitting email address'
                 )
 
                 let emailVerified = false
-                for (let attempt = 1; attempt <= this.maxManualAttempts; attempt++) {
+                if (accountEmail) {
+                    const filled = await this.fillEmail(page, accountEmail)
+                    if (filled) {
+                        await this.bot.utils.wait(500)
+                        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
+                        const emailError = await getErrorMessage(page)
+                        if (!emailError) {
+                            this.bot.logger.info(this.bot.isMobile, 'LOGIN-CODE', 'Auto-submitted account email, code sent')
+                            emailVerified = true
+                        }
+                    }
+                }
+
+                if (!emailVerified) {
+                    for (let attempt = 1; attempt <= this.maxManualAttempts; attempt++) {
                     const email = await promptInput({
                         question: maskedHint
                             ? `Enter the full email address for "${maskedHint}" to send the code to (waiting ${this.maxManualSeconds}s): `
@@ -191,6 +203,7 @@ export class CodeLogin {
                     this.bot.logger.info(this.bot.isMobile, 'LOGIN-CODE', 'Email accepted, verification code sent')
                     emailVerified = true
                     break
+                }
                 }
 
                 if (!emailVerified) {

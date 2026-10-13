@@ -135,6 +135,25 @@ export class Search extends BaseActivity {
                         tracker.context,
                         `no points ${stats.stagnant}/${tracker.stagnantLimit} | query="${query}" | ${tracker.progress()}`
                     )
+
+                    // Intelligent anti-ban & Bing cooldown detection:
+                    // Microsoft Rewards often triggers a temporary 15-minute search cooldown (0 points per search).
+                    // Continuously hammering queries while receiving 0 points flags accounts as bots.
+                    if (stats.stagnant === 3 && !tracker.done()) {
+                        this.bot.logger.warn(
+                            isMobile,
+                            tracker.context,
+                            `[ANTI-BAN] Detected 3 consecutive searches with 0 points. Bing cooldown suspected. Waiting 60s cooldown buffer before retry.`
+                        )
+                        await this.bot.utils.wait(60000)
+                    } else if (stats.stagnant >= 4 && !tracker.done()) {
+                        this.bot.logger.warn(
+                            isMobile,
+                            tracker.context,
+                            `[ANTI-BAN] Bing cooldown confirmed (4 zero-point searches). Safely stopping search session to protect account BotScore and prevent ban.`
+                        )
+                        break
+                    }
                 }
             }
 
@@ -148,6 +167,25 @@ export class Search extends BaseActivity {
             return stats
         }
     }
+
+    private async humanType(page: Page, text: string): Promise<void> {
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i]!
+            await page.keyboard.type(char)
+
+            // Realistic keystroke cadence: base 35-95ms
+            let delay = Math.floor(Math.random() * 60) + 35
+            if (char === ' ' || char === '-' || char === ',' || char === '.') {
+                // Word boundary pause (human thinking cadence)
+                delay += Math.floor(Math.random() * 120) + 80
+            } else if (Math.random() < 0.07) {
+                // Occasional slight micro-hesitation
+                delay += Math.floor(Math.random() * 160) + 100
+            }
+            await this.bot.utils.wait(delay)
+        }
+    }
+
     private async bingSearch(page: Page, query: string, isMobile: boolean): Promise<void> {
         this.searchCount++
 
@@ -161,24 +199,25 @@ export class Search extends BaseActivity {
             try {
                 const searchBox = page.locator(SEARCH_BOX)
 
-                await page.evaluate(() => window.scrollTo({ left: 0, top: 0, behavior: 'auto' }))
-                await page.keyboard.press('Home')
+                await page.keyboard.press('Home').catch(() => {})
                 await searchBox.waitFor({ state: 'visible', timeout: 15000 })
 
-                await this.bot.utils.wait(1000)
+                await this.bot.utils.wait(this.bot.utils.randomNumber(400, 800))
                 await this.bot.browser.utils.ghostClick(page, SEARCH_BOX, { clickCount: 3 })
                 await searchBox.fill('')
 
-                await page.keyboard.type(query, { delay: this.bot.utils.randomDelay(45, 90) })
+                await this.bot.utils.wait(this.bot.utils.randomNumber(200, 450))
+                await this.humanType(page, query)
+                await this.bot.utils.wait(this.bot.utils.randomNumber(300, 600))
                 await page.keyboard.press('Enter')
                 await this.bot.utils.wait(3000)
 
                 if (this.bot.config.searchSettings.scrollRandomResults) {
-                    await this.bot.utils.wait(2000)
+                    await this.bot.utils.wait(this.bot.utils.randomNumber(1200, 2500))
                     await this.randomScroll(page, isMobile)
                 }
                 if (this.bot.config.searchSettings.clickRandomResults) {
-                    await this.bot.utils.wait(2000)
+                    await this.bot.utils.wait(this.bot.utils.randomNumber(1500, 3000))
                     await this.clickRandomLink(page, isMobile)
                 }
 
@@ -204,10 +243,37 @@ export class Search extends BaseActivity {
 
     private async randomScroll(page: Page, isMobile: boolean) {
         try {
-            await page.evaluate(() => {
-                const maxScroll = Math.max(1, document.body.scrollHeight - window.innerHeight)
-                window.scrollTo({ left: 0, top: Math.floor(Math.random() * maxScroll), behavior: 'auto' })
-            })
+            if (!isMobile) {
+                // Desktop: natural mouse wheel scrolling with deceleration strokes
+                const strokes = Math.floor(Math.random() * 3) + 3 // 3 to 5 wheel strokes
+                for (let i = 0; i < strokes; i++) {
+                    const deltaY = Math.floor(Math.random() * 180) + 120
+                    await page.mouse.wheel(0, deltaY)
+                    await this.bot.utils.wait(Math.floor(Math.random() * 220) + 150)
+                }
+                // 30% chance to scroll back up slightly to simulate reading a snippet
+                if (Math.random() < 0.3) {
+                    await page.mouse.wheel(0, -(Math.floor(Math.random() * 120) + 60))
+                    await this.bot.utils.wait(Math.floor(Math.random() * 200) + 150)
+                }
+            } else {
+                // Mobile: smooth stepped scrolling with easing curve
+                await page.evaluate(async () => {
+                    const maxScroll = Math.max(1, document.body.scrollHeight - window.innerHeight)
+                    const targetY = Math.min(maxScroll, Math.floor(Math.random() * 600) + 200)
+                    const startY = window.scrollY
+                    const distance = targetY - startY
+                    const steps = 12 + Math.floor(Math.random() * 8)
+
+                    for (let step = 1; step <= steps; step++) {
+                        const progress = step / steps
+                        // Quadratic ease-out
+                        const ease = progress * (2 - progress)
+                        window.scrollTo(0, startY + distance * ease)
+                        await new Promise(r => setTimeout(r, 16 + Math.floor(Math.random() * 12)))
+                    }
+                })
+            }
         } catch (error) {
             this.bot.logger.error(
                 isMobile,
@@ -220,14 +286,40 @@ export class Search extends BaseActivity {
     private async clickRandomLink(page: Page, isMobile: boolean) {
         try {
             const searchPageUrl = page.url()
-            await this.bot.browser.utils.ghostClick(page, RESULT_LINK)
-            await this.bot.utils.wait(this.bot.config.searchSettings.searchResultVisitTime)
+            const linkLocators = page.locator('#b_results .b_algo h2 a, #b_results .b_algo a[href^="http"]')
+            const count = await linkLocators.count().catch(() => 0)
+
+            if (count > 0) {
+                // Pick randomly among top 3 results, with weighted bias towards #1
+                const maxIdx = Math.min(count - 1, 2)
+                const chosenIdx = Math.random() < 0.6 ? 0 : Math.floor(Math.random() * (maxIdx + 1))
+                const chosenLocator = linkLocators.nth(chosenIdx)
+
+                await chosenLocator.scrollIntoViewIfNeeded().catch(() => {})
+                await this.bot.utils.wait(this.bot.utils.randomNumber(300, 600))
+                await chosenLocator.click({ timeout: 5000 }).catch(async () => {
+                    await this.bot.browser.utils.ghostClick(page, RESULT_LINK)
+                })
+            } else {
+                await this.bot.browser.utils.ghostClick(page, RESULT_LINK)
+            }
+
+            const rawVisitTime = this.bot.config.searchSettings.searchResultVisitTime
+            const baseVisitMs = typeof rawVisitTime === 'number'
+                ? rawVisitTime
+                : this.bot.utils.stringToNumber(rawVisitTime)
+            const actualVisitTime = Math.max(3000, baseVisitMs + (Math.floor(Math.random() * 4000) - 2000))
+            await this.bot.utils.wait(actualVisitTime)
 
             if (isMobile) {
-                await page.goto(searchPageUrl)
+                await page.goto(searchPageUrl).catch(() => {})
             } else {
-                const newTab = await this.bot.browser.utils.getLatestTab(page)
-                await this.bot.browser.utils.closeTabs(newTab)
+                const newTab = await this.bot.browser.utils.getLatestTab(page).catch(() => null)
+                if (newTab && newTab !== page) {
+                    await this.bot.browser.utils.closeTabs(newTab)
+                } else {
+                    await page.goto(searchPageUrl).catch(() => {})
+                }
             }
         } catch (error) {
             this.bot.logger.error(

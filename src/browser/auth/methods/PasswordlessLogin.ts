@@ -4,7 +4,7 @@ import type { MicrosoftRewardsBot } from '../../../index'
 type ApprovalState = 'APPROVED' | 'RETRY_AVAILABLE' | 'PENDING'
 
 export class PasswordlessLogin {
-    private readonly approvalTimeoutSeconds = 60
+    private readonly approvalTimeoutSeconds = 120
     private readonly maxRequestRetries = 1
     private readonly numberDisplaySelector = '[data-testid="displaySign"]'
     private readonly rngcMarkerSelector = '[data-testid="psRNGCDefaultType"]'
@@ -22,19 +22,46 @@ export class PasswordlessLogin {
     }
 
     private async getApprovalState(page: Page): Promise<ApprovalState> {
-        const [hasRngcMarker, hasNumber, hasShield, hasPrimaryButton] = await Promise.all([
-            this.isAttached(page, this.rngcMarkerSelector),
-            this.isAttached(page, this.numberDisplaySelector),
-            this.isAttached(page, this.shieldMarkerSelector),
-            page
-                .locator(this.primaryButtonSelector)
-                .isVisible()
-                .catch(() => false)
-        ])
+        try {
+            const url = page.url().toLowerCase()
+            if (url.includes('rewards.bing.com') || url.includes('account.microsoft.com')) {
+                return 'APPROVED'
+            }
 
-        if (hasRngcMarker && hasPrimaryButton && !hasNumber && !hasShield) return 'RETRY_AVAILABLE'
-        if (!hasRngcMarker && !hasNumber && !hasShield) return 'APPROVED'
-        return 'PENDING'
+            const pageText = await page.evaluate(() => document.body.innerText).catch(() => '')
+            if (/stay signed in|duy trì đăng nhập/i.test(pageText)) {
+                return 'APPROVED'
+            }
+
+            if (/approve (sign-in )?request|microsoft authenticator/i.test(pageText)) {
+                return 'PENDING'
+            }
+
+            if (/send another request|try again|thử lại/i.test(pageText)) {
+                return 'RETRY_AVAILABLE'
+            }
+
+            const [hasRngcMarker, hasNumber, hasShield, hasPrimaryButton] = await Promise.all([
+                this.isAttached(page, this.rngcMarkerSelector),
+                this.isAttached(page, this.numberDisplaySelector),
+                this.isAttached(page, this.shieldMarkerSelector),
+                page
+                    .locator(this.primaryButtonSelector)
+                    .isVisible()
+                    .catch(() => false)
+            ])
+
+            if (hasRngcMarker && hasPrimaryButton && !hasNumber && !hasShield) return 'RETRY_AVAILABLE'
+            if (hasRngcMarker || hasNumber || hasShield) return 'PENDING'
+
+            if (!url.includes('login.live.com') && !url.includes('login.microsoftonline.com')) {
+                return 'APPROVED'
+            }
+
+            return 'PENDING'
+        } catch {
+            return 'PENDING'
+        }
     }
 
     private async getStableApprovalState(page: Page): Promise<ApprovalState> {
@@ -47,10 +74,21 @@ export class PasswordlessLogin {
 
     private async getDisplayedNumber(page: Page): Promise<string | null> {
         try {
+            const pageText = await page.evaluate(() => document.body.innerText).catch(() => '')
+            const match = pageText.match(/Approve request\s+([A-Z0-9]+)\s+on your/i)
+            if (match && match[1]) {
+                return match[1]
+            }
+
+            const checkbox = await page.$('input[type="checkbox"], input[name="DontShowAgain"]').catch(() => null)
+            if (checkbox && !(await checkbox.isChecked().catch(() => false))) {
+                await checkbox.check().catch(() => {})
+            }
+
             const numberElement = await page
                 .waitForSelector(this.numberDisplaySelector, {
                     state: 'visible',
-                    timeout: 5000
+                    timeout: 2000
                 })
                 .catch(() => null)
 
@@ -127,7 +165,7 @@ export class PasswordlessLogin {
             this.bot.logger.info(
                 this.bot.isMobile,
                 'LOGIN-PASSWORDLESS',
-                `Please approve login and select number: ${displayedNumber}`,
+                `>>> DUYET DANG NHAP TREN APP AUTHENTICATOR VOI MA: [ ${displayedNumber} ] <<<`,
                 'yellowBright'
             )
             return

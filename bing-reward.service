@@ -1,0 +1,20 @@
+[Unit]
+Description=Microsoft Bing Rewards Automation Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bing_reward
+ExecStart=/usr/bin/npm run schedule
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=TZ=Asia/Ho_Chi_Minh
+Environment=SCHEDULE_HOUR=9
+Environment=SCHEDULE_MINUTE=0
+Environment=SCHEDULE_JITTER_MINUTES=15
+Environment=FORCE_HEADLESS=1
+
+[Install]
+WantedBy=multi-user.target
